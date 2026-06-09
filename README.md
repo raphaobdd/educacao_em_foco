@@ -16,6 +16,8 @@ O dashboard oferece:
 
 ## 🚀 Como Executar
 
+Recomendamos que use o Google Colab para executar o notebook com os arquivos csv como anexo
+
 ### 1. Instalar dependências
 
 Certifique-se de ter Python 3.8+ instalado.
