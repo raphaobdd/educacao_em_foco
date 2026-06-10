@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 from pymongo import MongoClient
+import networkx as nx
 
 warnings.filterwarnings("ignore")
 
@@ -126,28 +127,40 @@ def carregar_dados():
 
     return df_ies, df_docentes, df_cursos, df_perfil
 
-# ─── Coordenadas base ──────────────────────────────────────────────────────────
-COORDS = {
-    "CAMPINAS": (-22.9056, -47.0608), "AMERICANA": (-22.7388, -47.3310),
-    "SUMARE": (-22.8218, -47.2671), "SANTA BARBARA D'OESTE": (-22.7539, -47.4144),
-    "NOVA ODESSA": (-22.7803, -47.2956), "HORTOLÂNDIA": (-22.8584, -47.2200),
-    "HORTOLANDIA": (-22.8584, -47.2200), "INDAIATUBA": (-23.0905, -47.2189),
-    "VALINHOS": (-22.9733, -46.9939), "VINHEDO": (-23.0300, -46.9165),
-    "JAGUARIUNA": (-22.6956, -46.9853), "HOLAMBRA": (-22.6400, -47.0608),
-    "COSMOPOLIS": (-22.6453, -47.1967), "ARTHUR NOGUEIRA": (-22.5656, -47.0058),
-    "ENGENHEIRO COELHO": (-22.4867, -47.1783), "PAULINIA": (-22.7642, -47.1528),
-    "ITATIBA": (-23.0026, -46.8383), "ATIBAIA": (-23.1178, -46.5539),
-    "BRAGANCA PAULISTA": (-22.9514, -46.5412), "AMPARO": (-22.7014, -46.7672),
-    "MONTE MOR": (-22.9364, -47.3189), "CAPIVARI": (-22.9961, -47.5083),
-    "CHARQUEADA": (-22.5086, -47.7767), "PIRACICABA": (-22.7253, -47.6492),
-    "LIMEIRA": (-22.4456, -47.4014), "ARARAS": (-22.3219, -47.3839),
-    "LEME": (-22.1897, -47.3897), "RIO CLARO": (-22.4149, -47.5647),
-    "SAO PEDRO": (-22.5494, -47.9136), "MOGI MIRIM": (-22.4322, -46.9567),
-    "MOGI GUACU": (-22.3703, -46.9428), "ESPIRITO SANTO DO PINHAL": (-22.1942, -46.7431),
-    "JUNDIAI": (-23.1861, -46.8844), "ITAPIRA": (-22.4361, -46.8239),
-    "PEDREIRA": (-22.7414, -46.9011), "MORUNGABA": (-22.8961, -46.8650),
-    "SAO PAULO": (-23.5505, -46.6333), "SOROCABA": (-23.5015, -47.4526),
-}
+# ─── Coordenadas base (Lidas do CSV com fallbacks) ─────────────────────────────
+@st.cache_data
+def carregar_coordenadas():
+    try:
+        coords_df = pd.read_csv("municipios_coords.csv", encoding="utf-8")
+        coords_dict = {}
+        for _, row in coords_df.iterrows():
+            key = rm_acc(str(row["municipio"])).strip().upper()
+            coords_dict[key] = (float(row["latitude"]), float(row["longitude"]))
+        return coords_dict
+    except Exception:
+        return {
+            "CAMPINAS": (-22.9056, -47.0608), "AMERICANA": (-22.7388, -47.3310),
+            "SUMARE": (-22.8218, -47.2671), "SANTA BARBARA D'OESTE": (-22.7539, -47.4144),
+            "NOVA ODESSA": (-22.7803, -47.2956), "HORTOLÂNDIA": (-22.8584, -47.2200),
+            "HORTOLANDIA": (-22.8584, -47.2200), "INDAIATUBA": (-23.0905, -47.2189),
+            "VALINHOS": (-22.9733, -46.9939), "VINHEDO": (-23.0300, -46.9165),
+            "JAGUARIUNA": (-22.6956, -46.9853), "HOLAMBRA": (-22.6400, -47.0608),
+            "COSMOPOLIS": (-22.6453, -47.1967), "ARTHUR NOGUEIRA": (-22.5656, -47.0058),
+            "ENGENHEIRO COELHO": (-22.4867, -47.1783), "PAULINIA": (-22.7642, -47.1528),
+            "ITATIBA": (-23.0026, -46.8383), "ATIBAIA": (-23.1178, -46.5539),
+            "BRAGANCA PAULISTA": (-22.9514, -46.5412), "AMPARO": (-22.7014, -46.7672),
+            "MONTE MOR": (-22.9364, -47.3189), "CAPIVARI": (-22.9961, -47.5083),
+            "CHARQUEADA": (-22.5086, -47.7767), "PIRACICABA": (-22.7253, -47.6492),
+            "LIMEIRA": (-22.4456, -47.4014), "ARARAS": (-22.3219, -47.3839),
+            "LEME": (-22.1897, -47.3897), "RIO CLARO": (-22.4149, -47.5647),
+            "SAO PEDRO": (-22.5494, -47.9136), "MOGI MIRIM": (-22.4322, -46.9567),
+            "MOGI GUACU": (-22.3703, -46.9428), "ESPIRITO SANTO DO PINHAL": (-22.1942, -46.7431),
+            "JUNDIAI": (-23.1861, -46.8844), "ITAPIRA": (-22.4361, -46.8239),
+            "PEDREIRA": (-22.7414, -46.9011), "MORUNGABA": (-22.8961, -46.8650),
+            "SAO PAULO": (-23.5505, -46.6333), "SOROCABA": (-23.5015, -47.4526),
+        }
+
+COORDS = carregar_coordenadas()
 
 REF_LAT, REF_LON = -22.9056, -47.0608
 
@@ -228,22 +241,34 @@ redes_sel  = st.sidebar.multiselect("Rede", redes_disp, default=redes_disp)
 orgs_disp  = sorted(df_ies["organizacao"].dropna().unique().tolist()) if "organizacao" in df_ies.columns else []
 orgs_sel   = st.sidebar.multiselect("Organização acadêmica", orgs_disp, default=orgs_disp)
 
-if "score_atratividade" in df_perfil.columns:
+if "score_atratividade" in df_perfil.columns and not df_perfil.empty:
+    min_val = int(math.floor(float(df_perfil["score_atratividade"].min())))
+    max_val = int(math.ceil(float(df_perfil["score_atratividade"].max())))
     score_min, score_max = st.sidebar.slider(
-        "Score de Atratividade", 0.0, 100.0, (0.0, 100.0), step=1.0
+        "Score de Atratividade", min_val, max_val, (min_val, max_val), step=1
     )
 else:
-    score_min, score_max = 0.0, 100.0
+    score_min, score_max = 0, 100
 
-# Aplica filtros
 mask = pd.Series(True, index=df_ies.index)
 if redes_sel and "rede" in df_ies.columns:
     mask &= df_ies["rede"].isin(redes_sel)
 if orgs_sel and "organizacao" in df_ies.columns:
     mask &= df_ies["organizacao"].isin(orgs_sel)
 
-df_f = df_ies[mask].copy()
-df_perf_f = df_perfil[df_perfil["co_ies"].isin(df_f["co_ies"])] if "co_ies" in df_perfil.columns else df_perfil
+df_f_temp = df_ies[mask].copy()
+co_ies_filtered = df_f_temp["co_ies"].unique() if "co_ies" in df_f_temp.columns else []
+
+df_perf_f = df_perfil[df_perfil["co_ies"].isin(co_ies_filtered)].copy() if "co_ies" in df_perfil.columns else df_perfil.copy()
+
+if "score_atratividade" in df_perf_f.columns:
+    df_perf_f = df_perf_f[(df_perf_f["score_atratividade"] >= score_min) & (df_perf_f["score_atratividade"] <= score_max)]
+
+# Determina co_ies final após todos os filtros
+co_ies_final = df_perf_f["co_ies"].unique() if "co_ies" in df_perf_f.columns else co_ies_filtered
+
+# Filtra df_f (instituições) para consistência completa
+df_f = df_ies[df_ies["co_ies"].isin(co_ies_final)].copy() if "co_ies" in df_ies.columns else df_ies.copy()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CABEÇALHO
@@ -258,7 +283,9 @@ k1, k2, k3, k4, k5 = st.columns(5)
 total_ies      = df_f["co_ies"].nunique() if "co_ies" in df_f else len(df_f)
 total_cursos   = len(df_cursos[df_cursos["co_ies"].isin(df_f["co_ies"])]) if "co_ies" in df_cursos.columns else len(df_cursos)
 perc_pub       = (df_f["rede"].value_counts(normalize=True).get("Pública", 0) * 100) if "rede" in df_f else 0
-med_dout       = df_docentes["perc_doutores"].mean() if "perc_doutores" in df_docentes.columns else 0
+
+df_docentes_f  = df_docentes[df_docentes["co_ies"].isin(df_f["co_ies"])] if "co_ies" in df_docentes.columns else df_docentes
+med_dout       = df_docentes_f["perc_doutores"].mean() if "perc_doutores" in df_docentes_f.columns else 0
 med_score      = df_perf_f["score_atratividade"].mean() if "score_atratividade" in df_perf_f.columns else 0
 
 k1.metric("🏛️ Instituições", f"{total_ies:,}")
@@ -360,11 +387,24 @@ with col5:
         st.info("Dados de docentes insuficientes para este gráfico.")
 
 with col6:
-    st.markdown('<div class="section-title">Top 20 IES — Score de Atratividade</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Top IES — Score de Atratividade até a primeira Privada</div>', unsafe_allow_html=True)
     if "score_atratividade" in df_perf_f.columns:
-        df_g6 = (df_perf_f[df_perf_f["score_atratividade"] > 0]
-                 .nlargest(20, "score_atratividade")
-                 .sort_values("score_atratividade"))
+        df_g6_bruto = df_perf_f[df_perf_f["score_atratividade"] > 0].sort_values("score_atratividade", ascending=False).reset_index(drop=True)
+        
+        # Encontra o índice da primeira linha onde a rede é privada
+        indice_privada = df_g6_bruto[df_g6_bruto['rede'].str.lower() == 'privada'].index
+
+        if not indice_privada.empty:
+            top_n = int(indice_privada[0] + 1)
+            df_g6 = df_g6_bruto.iloc[:top_n].copy()
+        else:
+            df_g6 = df_g6_bruto.iloc[:25].copy()
+            top_n = len(df_g6)
+
+        df_g6 = df_g6.sort_values('score_atratividade')
+
+        altura_dinamica = max(400, top_n * 30)
+
         fig6 = px.bar(
             df_g6, x="score_atratividade", y="nome", color="rede", orientation="h",
             color_discrete_sequence=CORES_REDE, text="score_atratividade",
@@ -372,7 +412,7 @@ with col6:
             labels={"score_atratividade": "Score (0–100)", "nome": "IES"},
         )
         fig6.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-        fig6.update_layout(**LAYOUT_BASE, height=540, xaxis_range=[0, 115],
+        fig6.update_layout(**LAYOUT_BASE, height=altura_dinamica, xaxis_range=[0, 115],
                            yaxis={"categoryorder": "total ascending"},
                            xaxis=dict(gridcolor="#2a2d3e"))
         st.plotly_chart(fig6, use_container_width=True)
@@ -407,17 +447,17 @@ with col8:
         })
         .reset_index()
     )
-    categorias_radar = ["Score Atrativ.", "% Doutores", "% Qualificados", "Score Custo", "Score Distância"]
+    categorias_radar = ["Score Atratividade", "% Doutores", "% Qualificados", "Score Distância", "Score Custo"]
     fig8 = go.Figure()
     for rede, cor in [("Pública", COR_PUBLICA), ("Privada", COR_PRIVADA)]:
-        sub = df_perf_f[df_perf_f["rede"] == rede] if "rede" in df_perf_f.columns else pd.DataFrame()
-        sub_doc = df_docentes_ag[df_docentes_ag["co_ies"].isin(sub["co_ies"])] if not sub.empty else pd.DataFrame()
+        sub_ies = df_f[df_f["rede"] == rede] if "rede" in df_f.columns else pd.DataFrame()
+        sub_doc = df_docentes_ag[df_docentes_ag["co_ies"].isin(sub_ies["co_ies"])] if not sub_ies.empty else pd.DataFrame()
         vals = [
-            sub["score_atratividade"].mean()   if "score_atratividade" in sub.columns  and not sub.empty else 0,
+            sub_ies["score_atratividade"].mean() if "score_atratividade" in sub_ies.columns and not sub_ies.empty else 0,
             sub_doc["perc_doutores"].mean()     if "perc_doutores" in sub_doc.columns   and not sub_doc.empty else 0,
             sub_doc["perc_qualificados"].mean() if "perc_qualificados" in sub_doc.columns and not sub_doc.empty else 0,
-            sub["score_custo"].mean()           if "score_custo" in sub.columns          and not sub.empty else 0,
-            sub["score_distancia"].mean()       if "score_distancia" in sub.columns      and not sub.empty else 0,
+            sub_ies["score_distancia"].mean()   if "score_distancia" in sub_ies.columns   and not sub_ies.empty else 0,
+            sub_ies["score_custo"].mean()       if "score_custo" in sub_ies.columns       and not sub_ies.empty else 0,
         ]
         vals = [round(v, 1) if not (isinstance(v, float) and math.isnan(v)) else 0 for v in vals]
         fig8.add_trace(go.Scatterpolar(
@@ -549,6 +589,165 @@ st.dataframe(
         "distancia_campinas_km": st.column_config.NumberColumn("Dist. (km)", format="%.0f km"),
     },
 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GRAFO INTERATIVO
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("---")
+st.markdown('<div class="section-title">🕸️ Grafo Interativo — IES × Graus Acadêmicos</div>', unsafe_allow_html=True)
+
+layout_opcao = st.radio(
+    "Escolha o layout do Grafo:",
+    ["Completo (Spring Layout)", "Top 40 (Shell Layout)"],
+    horizontal=True,
+    help="Spring Layout: Algoritmo de forças físicas conectando todas as IES filtradas aos seus graus. Shell Layout: Anéis concêntricos centralizando os graus acadêmicos e distribuindo as top 40 IES na órbita externa."
+)
+
+@st.cache_data(show_spinner="Calculando posições do grafo...")
+def gerar_dados_grafo(df_perf_f_serializable, layout_opcao):
+    df_perf_f_loc = pd.DataFrame(df_perf_f_serializable)
+    G = nx.Graph()
+    vistos = set()
+    nos_ies, cor_ies, tamanho_ies, hover_ies = [], [], [], []
+    graus_unicos = set()
+    GRAUS_VALIDOS = ['Bacharelado', 'Licenciatura', 'Tecnológico']
+    
+    COR_REDE = {'Pública': '#1D9E75', 'Privada': '#D85A30'}
+    COR_GRAU = {'Bacharelado': '#7F77DD', 'Licenciatura': '#1D9E75', 'Tecnológico': '#EF9F27'}
+    
+    df_data = df_perf_f_loc.sort_values('nome')
+    if layout_opcao == "Top 40 (Shell Layout)":
+        df_data = df_data.nlargest(40, 'score_atratividade')
+        
+    for _, row in df_data.iterrows():
+        nome = row.get('nome', '?')
+        sigla = row.get('sigla', '')
+        sigla_or_name = sigla if pd.notna(sigla) and sigla != '' else nome[:20]
+        rede = row.get('rede', 'Privada')
+        score = row.get('score_atratividade') or 30
+        graus = [g for g in row.get('graus_oferecidos', []) if g in GRAUS_VALIDOS]
+        
+        if not nome or not graus or nome in vistos:
+            continue
+        vistos.add(nome)
+        
+        G.add_node(nome, tipo='ies', rede=rede, score=score, label=sigla_or_name)
+        nos_ies.append(nome)
+        cor_ies.append(COR_REDE.get(rede, '#aaa'))
+        tamanho_ies.append(max(10, min(score * 0.45, 35)))
+        hover_ies.append(f"<b>{nome}</b><br>Rede: {rede}<br>Score Atratividade: {score:.1f}<br>Graus: {', '.join(graus)}")
+        
+        for g in graus:
+            graus_unicos.add(g)
+            G.add_node(g, tipo='grau', label=g)
+            G.add_edge(nome, g)
+            
+    if len(G) == 0:
+        return None
+        
+    graus_list = list(graus_unicos)
+    
+    if layout_opcao == "Top 40 (Shell Layout)":
+        pos = nx.shell_layout(G, [graus_list, nos_ies])
+    else:
+        pos = nx.spring_layout(G, k=1.8, seed=42, iterations=100)
+        
+    pos_data = {node: list(coord) for node, coord in pos.items()}
+    
+    return {
+        "edges": list(G.edges(data=True)),
+        "nos_ies": nos_ies,
+        "cor_ies": cor_ies,
+        "tamanho_ies": tamanho_ies,
+        "hover_ies": hover_ies,
+        "graus_list": graus_list,
+        "pos": pos_data,
+        "labels": {n: G.nodes[n].get('label', n) for n in G.nodes}
+    }
+
+if not df_perf_f.empty:
+    df_serializable = df_perf_f.to_dict(orient='records')
+    dados_g = gerar_dados_grafo(df_serializable, layout_opcao)
+    
+    if dados_g:
+        pos = dados_g["pos"]
+        
+        edge_x = []
+        edge_y = []
+        for edge in dados_g["edges"]:
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            edge_x.extend([x0, x1, None])
+            edge_y.extend([y0, y1, None])
+            
+        edge_trace = go.Scatter(
+            x=edge_x, y=edge_y,
+            line=dict(width=0.8, color='rgba(138, 143, 168, 0.25)'),
+            hoverinfo='none',
+            mode='lines'
+        )
+        
+        ies_x = [pos[n][0] for n in dados_g["nos_ies"]]
+        ies_y = [pos[n][1] for n in dados_g["nos_ies"]]
+        
+        ies_node_trace = go.Scatter(
+            x=ies_x, y=ies_y,
+            mode='markers',
+            hoverinfo='text',
+            text=dados_g["hover_ies"],
+            marker=dict(
+                showscale=False,
+                color=dados_g["cor_ies"],
+                size=dados_g["tamanho_ies"],
+                line=dict(width=1, color='#1a1d2e')
+            ),
+            name="IES"
+        )
+        
+        COR_GRAU = {'Bacharelado': '#7F77DD', 'Licenciatura': '#1D9E75', 'Tecnológico': '#EF9F27'}
+        grau_traces = []
+        for g in dados_g["graus_list"]:
+            gx, gy = [pos[g][0]], [pos[g][1]]
+            grau_traces.append(go.Scatter(
+                x=gx, y=gy,
+                mode='markers+text',
+                hoverinfo='text',
+                text=[f"<b>{g}</b>"],
+                textposition="top center",
+                textfont=dict(color='white', size=12, family="Inter, sans-serif"),
+                marker=dict(
+                    color=COR_GRAU.get(g, '#fff'),
+                    size=26,
+                    line=dict(width=2, color='white')
+                ),
+                name=g
+            ))
+            
+        fig_grafo = go.Figure(data=[edge_trace, ies_node_trace] + grau_traces)
+        
+        fig_grafo.update_layout(
+            showlegend=True,
+            hovermode='closest',
+            margin=dict(b=20, l=10, r=10, t=10),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="center",
+                x=0.5,
+                font=dict(color="#c8cbdf")
+            ),
+            height=650
+        )
+        st.plotly_chart(fig_grafo, use_container_width=True)
+    else:
+        st.info("Grafo vazio com os filtros atuais.")
+else:
+    st.info("Sem dados suficientes para construir o grafo.")
 
 # ─── Rodapé ────────────────────────────────────────────────────────────────────
 st.markdown("---")
