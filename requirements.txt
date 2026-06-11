@@ -5,3 +5,6 @@ certifi
 plotly>=5.20.0
 pandas>=2.0.0
 numpy>=1.24.0
+networkx>=3.0
+pyvis>=0.3.0
+ipywidgets>=8.0.0
